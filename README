@@ -1,0 +1,3 @@
+We take a base backup from a live server using a libpq connection.
+
+./initslave.py "host=remote user=postgres" /path/to/slave/pgdata
