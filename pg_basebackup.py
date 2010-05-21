@@ -1,8 +1,11 @@
 #!/usr/bin/env python
 
 import sys, os, os.path, psycopg2
+from zlib import decompress
 
+CSIZE = 8192 * 1024 # we work with chunks of 8MB
 LABEL = 'initslave.py'
+
 file_list_sql = """
 with recursive files(path, isdir, size, visited) as (
   select name, (pg_stat_file(name)).isdir, (pg_stat_file(name)).size, false
@@ -22,22 +25,23 @@ select * from files;
 """ % (os.path.sep)
 
 read_file_sql = """
-CREATE OR REPLACE FUNCTION initslave_read_file 
+CREATE OR REPLACE FUNCTION pg_bb_read_file 
 (path text, 
  pos bigint, 
- size bigint default 8192
+ size bigint default 8192*1024
 )
  RETURNS BYTEA
  LANGUAGE plpythonu
 AS $$
+  from zlib import compress
   f = open(path, 'rb')
   f.seek(pos)
-  return f.read(size)
+  return compress(f.read(size))
 $$;
 
-CREATE OR REPLACE FUNCTION initslave_count_chunks
+CREATE OR REPLACE FUNCTION pg_bb_count_chunks
  (path text, 
-  length bigint default 8192
+  length bigint default 8192*1024
  )
  RETURNS bigint
  LANGUAGE SQL
@@ -89,12 +93,12 @@ if __name__ == '__main__':
 
         if not isdir:
             f = open(os.path.join(dest, path), 'wb+')
-            curs.execute("SELECT initslave_count_chunks(%s, 8192);", [path])
+            curs.execute("SELECT pg_bb_count_chunks(%s, %s);", [path, CSIZE])
 
-            for c in range(0, curs.fetchone()[0] - 1):
-                curs.execute("SELECT initslave_read_file(%s,%s,8192);", 
-                             [path, c*8192])
-                chunk = str(curs.fetchone()[0][1:]).decode('hex')
+            for c in range(0, curs.fetchone()[0]):
+                curs.execute("SELECT pg_bb_read_file(%s,%s,%s);", 
+                             [path, c*CSIZE, CSIZE])
+                chunk = decompress(str(curs.fetchone()[0][1:]).decode('hex'))
                 f.write(chunk)
             f.close()
 
