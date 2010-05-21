@@ -1,0 +1,4 @@
+
+- Add command line option for the chunk size
+- Make compressing optional?
+- Add compression level?
