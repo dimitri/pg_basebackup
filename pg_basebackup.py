@@ -138,7 +138,7 @@ def spawn_helper(dsn, dest, stdin, pgxlog, delay, verbose, debug):
                           % (os.environ['_'],
                              os.path.join(os.environ['PWD'], sys.argv[0]),
                              opt, dsn, dest))
-    if opts.verbose:
+    if verbose:
         log("Spawning %s" % " ".join(cmd))
 
     return subprocess.Popen(cmd,
@@ -172,7 +172,8 @@ def xlogcopy_loop(curs, dest, base, delay, verbose, debug):
                 get_one_file(curs, dest, path, verbose, debug)
                 wal_files[path] = size
 
-        log("polling stdin")
+        if verbose:
+            log("polling stdin")
         if p.poll(1000 * int(delay)):
             command = sys.stdin.readline()
             finished = command == "terminate\n"
@@ -298,11 +299,11 @@ if __name__ == '__main__':
 
     if not opts.slave:
         label = '%s_%s' % (LABEL, datetime.datetime.today().isoformat())
-        if opts.verbose:
-            log("SELECT pg_start_backup('%s');" % label)
+        log("SELECT pg_start_backup('%s');" % label)
         curs.execute("SELECT pg_start_backup(%s);", [label])
     else:
-        log("subprocess started: %s" % " ".join(sys.argv[1:]))
+        if opts.verbose:
+            log("subprocess started: %s" % " ".join(sys.argv[1:]))
 
     # launch an helper process to care for the logs
     if not opts.slave and not opts.xlog:
@@ -319,13 +320,15 @@ if __name__ == '__main__':
     if opts.xlog:
         # the only way this function returns is when we send 'terminate\n'
         # on its standard input
-        log("Entering xlogcopy loop with delay %d" % opts.delay)
+        if opts.verbose:
+            log("Entering xlogcopy loop with delay %d" % opts.delay)
         xlogcopy_loop(curs, dest, PGXLOG, opts.delay, opts.verbose, opts.debug)
         curs.close()
         sys.exit(0)
 
     if opts.slave:
-        log("Entering basecopy loop")
+        if opts.verbose:
+            log("Entering basecopy loop")
         basecopy_loop(curs, dest, base, opts.verbose, opts.debug)
         curs.close()
         sys.exit(0)
@@ -352,7 +355,8 @@ if __name__ == '__main__':
             n += 1
 
     # terminate the xlogcopy process
-    log("sending 'terminate' to %d" % xlogcopy.pid)
+    if opts.verbose:
+        log("sending 'terminate' to %d" % xlogcopy.pid)
     print >> xlogcopy.stdin, "terminate"
     if opts.verbose:
         log("Waiting on pid %d" % xlogcopy.pid)
@@ -361,7 +365,8 @@ if __name__ == '__main__':
     # teminate the helpers and wait on them
     if opts.jobs > 1:
         for j in range(opts.jobs):
-            log("close %d" % jobs[j].pid)
+            if opts.verbose:
+                log("close %d" % jobs[j].pid)
             jobs[j].stdin.close()
 
     if opts.jobs > 1:
@@ -370,8 +375,7 @@ if __name__ == '__main__':
 
     # Stop the backup now, we have it all
     if not opts.slave:
-        if opts.debug:
-            log("SELECT pg_stop_backup();")
+        log("SELECT pg_stop_backup();")
         curs.execute("SELECT pg_stop_backup();")
 
     curs.close()
