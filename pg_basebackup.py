@@ -15,13 +15,15 @@ CREATE OR REPLACE FUNCTION pg_bb_list_files
 ( IN basepath text default '',
  OUT path text,
  OUT isdir bool,
- OUT size bigint
+ OUT size bigint,
+ OUT ctime timestamptz
 )
  returns setof record
  language SQL
 as $$
 with recursive files(path, isdir, size) as (
-  select name, (pg_stat_file(name)).isdir, (pg_stat_file(name)).size
+  select name, (pg_stat_file(name)).isdir,
+         (pg_stat_file(name)).size, (pg_stat_file(name)).change
     from (select case when $1 = ''
                       then pg_ls_dir(setting)
                       else $1 || '%s' || pg_ls_dir(setting || '%s' || $1)
@@ -31,7 +33,8 @@ with recursive files(path, isdir, size) as (
 
   UNION ALL
 
-  select name, (pg_stat_file(name)).isdir, (pg_stat_file(name)).size
+  select name, (pg_stat_file(name)).isdir,
+         (pg_stat_file(name)).size, (pg_stat_file(name)).change
     from (select path || '%s' || pg_ls_dir(path) as name
             from files
 	   where isdir
@@ -107,7 +110,7 @@ def get_files(curs, dest, base, exclude, verbose, debug):
 
     curs.execute(sql, [base])
 
-    for path, isdir, size in curs.fetchall():
+    for path, isdir, size, ctime in curs.fetchall():
         if isdir:
             curdir = path
         else:
@@ -121,7 +124,7 @@ def get_files(curs, dest, base, exclude, verbose, debug):
             os.makedirs(cwd)
 
         if not isdir:
-            yield path, size
+            yield path, size, ctime
 
     return
 
@@ -165,12 +168,13 @@ def xlogcopy_loop(curs, dest, base, delay, verbose, debug):
 
     while not finished:
         # get all PGXLOG files, then again, then again
-        for path, size in get_files(curs, dest, base, None, verbose, debug):
-            if path in wal_files and wal_files[path] == size:
-                log("skipping '%s', size is still %d" % (path, size))
+        for path, size, ctime \
+                in get_files(curs, dest, base, None, verbose, debug):
+            if path in wal_files and wal_files[path] == ctime:
+                log("skipping '%s', same ctime" % path)
             else:
                 get_one_file(curs, dest, path, verbose, debug)
-                wal_files[path] = size
+                wal_files[path] = ctime
 
         if verbose:
             log("polling stdin")
@@ -297,7 +301,7 @@ if __name__ == '__main__':
     # BEGIN
     curs = conn.cursor()
 
-    if not opts.slave:
+    if not opts.slave and not opts.xlog:
         label = '%s_%s' % (LABEL, datetime.datetime.today().isoformat())
         log("SELECT pg_start_backup('%s');" % label)
         curs.execute("SELECT pg_start_backup(%s);", [label])
@@ -322,7 +326,11 @@ if __name__ == '__main__':
         # on its standard input
         if opts.verbose:
             log("Entering xlogcopy loop with delay %d" % opts.delay)
-        xlogcopy_loop(curs, dest, PGXLOG, opts.delay, opts.verbose, opts.debug)
+        try:
+            xlogcopy_loop(curs, dest, PGXLOG, opts.delay, opts.verbose, opts.debug)
+        except (Exception, KeyboardInterrupt), e:
+            # pg_basebackup.py -x could be run on its own for a warm standby
+            log(e)
         curs.close()
         sys.exit(0)
 
@@ -343,8 +351,8 @@ if __name__ == '__main__':
             jobs[j] = spawn_basecopy(dsn, dest, opts.verbose, opts.debug)
 
     n = 0
-    for path, size in get_files(curs, dest, base, exclude,
-                                opts.verbose, opts.debug):
+    for path, size, ctime in get_files(curs, dest, base, exclude,
+                                       opts.verbose, opts.debug):
         if opts.jobs == 1:
             # do the job ourself, how boring
             get_one_file(curs, dest, path, opts.verbose, opts.debug)
