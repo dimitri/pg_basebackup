@@ -125,15 +125,19 @@ def get_files(curs, dest, base, exclude, verbose, debug):
 
     return
 
-def spawn_xlogcopy(dsn, dest, delay, verbose, debug):
-    """ return the subprocess object that's copying the WALs in a loop """
+def spawn_helper(dsn, dest, stdin, pgxlog, delay, verbose, debug):
+    """ return the subprocess object we need """
     opt = ""
-    if opts.debug: opt += "-d "
-    if opts.verbose: opt += "-v "
-    cmd = shlex.split('%s %s %s -S -D %d -x "%s" %s' \
+    if debug:   opt += "-d "
+    if verbose: opt += "-v "
+    if stdin:   opt += "--stdin "
+    if pgxlog:  opt += "-x "
+    if delay:   opt += "-D %d " % delay
+
+    cmd = shlex.split('%s %s -S %s "%s" %s' \
                           % (os.environ['_'],
                              os.path.join(os.environ['PWD'], sys.argv[0]),
-                             opt, delay, dsn, dest))
+                             opt, dsn, dest))
     if opts.verbose:
         log("Spawning %s" % " ".join(cmd))
 
@@ -142,10 +146,17 @@ def spawn_xlogcopy(dsn, dest, delay, verbose, debug):
                             stdout = sys.stdout,
                             stderr = sys.stderr)
 
+def spawn_xlogcopy(dsn, dest, delay, verbose, debug):
+    """ return the subprocess object that's copying the WALs in a loop """
+    return spawn_helper(dsn, dest, False, True, delay, verbose, debug)
+
+def spawn_basecopy(dsn, dest, verbose, debug):
+    """ return a slave subprocess object"""
+    return spawn_helper(dsn, dest, True, False, None, verbose, debug)
+
 def xlogcopy_loop(curs, dest, base, delay, verbose, debug):
     """ loop over WAL files and copy them, until asked to terminate """
     import time, select
-    base = PGXLOG
     wal_files = {} # remember what we did already
     finished = False
 
@@ -153,7 +164,7 @@ def xlogcopy_loop(curs, dest, base, delay, verbose, debug):
     p.register(sys.stdin, select.POLLIN)
 
     while not finished:
-        # get all PGLOXG files, then again, then again
+        # get all PGXLOG files, then again, then again
         for path, size in get_files(curs, dest, base, None, verbose, debug):
             if path in wal_files and wal_files[path] == size:
                 log("skipping '%s', size is still %d" % (path, size))
@@ -168,8 +179,15 @@ def xlogcopy_loop(curs, dest, base, delay, verbose, debug):
 
     return
 
+def basecopy_loop(curs, dest, base, verbose, debug):
+    """ copy files given on stdin until we read 'terminate' """
+    for path in sys.stdin:
+        path = path[:-1]  # chomp \n
+        get_one_file(curs, dest, path, verbose, debug)
+    return
+
 if __name__ == '__main__':
-    usage  = '%prog [-x] "dsn" dest'
+    usage  = '%prog [-v] [-f] [-j jobs] "dsn" dest'
     parser = OptionParser(usage = usage)
 
     parser.add_option("--version", action = "store_true",
@@ -197,8 +215,13 @@ if __name__ == '__main__':
                       default = False,
                       help    = "remove destination directory if it exists")
 
-    parser.add_option("-D", "--delay", dest = "delay", default = 2,
-                      help    = "subprocess loop delay, use with -x")
+    parser.add_option("-j", "--jobs", dest = "jobs",
+                      type = "int", default = 1,
+                      help    = "how many helper jobs to launch")
+
+    parser.add_option("-D", "--delay", dest = "delay",
+                      type = "int", default = 2,
+                      help    = "pg_xlog subprocess loop delay, see -x")
 
     parser.add_option("-S", "--slave", action = "store_true",
                       dest    = "slave",
@@ -296,25 +319,54 @@ if __name__ == '__main__':
     if opts.xlog:
         # the only way this function returns is when we send 'terminate\n'
         # on its standard input
-        xlogcopy_loop(curs, dest, base, opts.delay, opts.verbose, opts.debug)
+        log("Entering xlogcopy loop with delay %d" % opts.delay)
+        xlogcopy_loop(curs, dest, PGXLOG, opts.delay, opts.verbose, opts.debug)
+        curs.close()
         sys.exit(0)
 
-    # main loop
+    if opts.slave:
+        log("Entering basecopy loop")
+        basecopy_loop(curs, dest, base, opts.verbose, opts.debug)
+        curs.close()
+        sys.exit(0)
+
+    # main loop --- slaves have exited already, won't reach this code.
     exclude = PGXLOG
+
+    # prepare the helpers
+    if opts.jobs > 1:
+        jobs = {}
+        for j in range(opts.jobs):
+            jobs[j] = spawn_basecopy(dsn, dest, opts.verbose, opts.debug)
+
+    n = 0
     for path, size in get_files(curs, dest, base, exclude,
                                 opts.verbose, opts.debug):
-        get_one_file(curs, dest, path, opts.verbose, opts.debug)
+        if opts.jobs == 1:
+            # do the job ourself, how boring
+            get_one_file(curs, dest, path, opts.verbose, opts.debug)
+        else:
+            # give next slave some work
+            #log("%d <-- '%s'" % (jobs[n % opts.jobs].pid, path))
+            print >> jobs[n % opts.jobs].stdin, path
+            n += 1
 
     # terminate the xlogcopy process
     log("sending 'terminate' to %d" % xlogcopy.pid)
     print >> xlogcopy.stdin, "terminate"
-
     if opts.verbose:
         log("Waiting on pid %d" % xlogcopy.pid)
-    r = xlogcopy.wait()
+    xlogcopy.wait()
 
-    if opts.verbose:
-        log("subprocess %d: %s" % (xlogcopy.pid, r))
+    # teminate the helpers and wait on them
+    if opts.jobs > 1:
+        for j in range(opts.jobs):
+            log("close %d" % jobs[j].pid)
+            jobs[j].stdin.close()
+
+    if opts.jobs > 1:
+        for j in range(opts.jobs):
+            jobs[j].wait()
 
     # Stop the backup now, we have it all
     if not opts.slave:
@@ -323,3 +375,6 @@ if __name__ == '__main__':
         curs.execute("SELECT pg_stop_backup();")
 
     curs.close()
+
+    log("Your cluster is ready at '%s'" % dest)
+    print
