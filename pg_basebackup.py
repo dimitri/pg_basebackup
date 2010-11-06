@@ -67,21 +67,26 @@ AS $$
 $$;
 """
 
+def log(msg):
+    """Just print the message out, with timestamp and pid"""
+    print "%s [%s] %s" \
+        % (datetime.datetime.now().strftime("%Y%m%d %H:%M:%S.%f"),
+           os.getpid(), msg)
+
 def get_one_file(curs, dest, path, verbose, debug):
     """Create the file named path in dest, and fetch its content"""
     f = open(os.path.join(dest, path), 'wb+')
 
     if verbose:
-        print path
+        log(path)
 
     if debug:
-        print "SELECT pg_bb_count_chunks(%s, %s);" % (path, CSIZE)
+        log("SELECT pg_bb_count_chunks(%s, %s);" % (path, CSIZE))
 
     curs.execute("SELECT pg_bb_count_chunks(%s, %s);", [path, CSIZE])
     for c in range(0, curs.fetchone()[0]):
         if debug:
-            print "SELECT pg_bb_read_file(%s,%s,%s);" \
-                % (path, c*CSIZE, CSIZE)
+            log("SELECT pg_bb_read_file(%s,%s,%s);" % (path, c*CSIZE, CSIZE))
 
         curs.execute("SELECT pg_bb_read_file(%s,%s,%s);",
                      [path, c*CSIZE, CSIZE])
@@ -97,7 +102,7 @@ def get_files(curs, dest, base, exclude, verbose, debug):
         sql += " WHERE path !~ '%s' " % exclude
 
     if verbose:
-        print sql % base
+        log(sql % base)
 
     curs.execute(sql, [base])
 
@@ -111,7 +116,7 @@ def get_files(curs, dest, base, exclude, verbose, debug):
 
         if not os.path.isdir(cwd):
             if verbose:
-                print "mkdir -p", cwd
+                log("mkdir -p %s" % cwd)
             os.makedirs(cwd)
 
         if not isdir:
@@ -214,7 +219,7 @@ if __name__ == '__main__':
 
     label = '%s_%s' % (LABEL, datetime.datetime.today().isoformat())
     if opts.verbose:
-        print "SELECT pg_start_backup('%s');" % label
+        log("SELECT pg_start_backup('%s');" % label)
     curs.execute("SELECT pg_start_backup(%s);", [label])
 
     # do the copy
@@ -225,6 +230,6 @@ if __name__ == '__main__':
     get_files(curs, dest, base, exclude, opts.verbose, opts.debug)
 
     if opts.debug:
-        print "SELECT pg_stop_backup();"
+        log("SELECT pg_stop_backup();")
     curs.execute("SELECT pg_stop_backup();")
     curs.close()
