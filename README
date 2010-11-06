@@ -1,3 +1,22 @@
 We take a base backup from a live server using a libpq connection.
 
+Usage: pg_basebackup.py "dsn" dest
+
+Options:
+  -h, --help            show this help message and exit
+  --version             show version and quit
+  -x, --pg_xlog         backup the pg_xlog files
+  -v, --verbose         be verbose and about processing progress
+  -d, --debug           show debug information, including SQL queries
+  -f, --force           remove destination directory if it exists
+  -D DELAY, --delay=DELAY
+                        subprocess loop delay, use with -x
+  -S, --slave           auxilliary process
+  --stdin               get list of files to backup from stdin
+
 ./pg_basebackup.py "host=remote user=postgres" /path/to/slave/pgdata
+
+
+Please not that while the backup is ongoing, we continue backuping the WAL
+files in a loop (see -D for the loop delay), so that we have all what we
+need on the slave as soon as the command finishes.
