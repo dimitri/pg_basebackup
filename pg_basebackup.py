@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 
-import sys, os, os.path, psycopg2, datetime
+import sys, os, os.path, psycopg2, datetime, shlex, subprocess
 from zlib import decompress
 from optparse import OptionParser
 
@@ -8,6 +8,7 @@ CSIZE = 8192 * 1024 # we work with chunks of 8MB
 LABEL = 'pg_basebackup'
 VERSION = 0.2
 PGXLOG = 'pg_xlog'
+PYTHON = '/usr/bin/python'
 
 list_files_sql = """
 CREATE OR REPLACE FUNCTION pg_bb_list_files
@@ -69,8 +70,8 @@ $$;
 
 def log(msg):
     """Just print the message out, with timestamp and pid"""
-    print "%s [%s] %s" \
-        % (datetime.datetime.now().strftime("%Y%m%d %H:%M:%S.%f"),
+    print "%s [%5d] %s" \
+        % (datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f"),
            os.getpid(), msg)
 
 def get_one_file(curs, dest, path, verbose, debug):
@@ -120,7 +121,51 @@ def get_files(curs, dest, base, exclude, verbose, debug):
             os.makedirs(cwd)
 
         if not isdir:
-            get_one_file(curs, dest, path, verbose, debug)
+            yield path, size
+
+    return
+
+def spawn_xlogcopy(dsn, dest, delay, verbose, debug):
+    """ return the subprocess object that's copying the WALs in a loop """
+    opt = ""
+    if opts.debug: opt += "-d "
+    if opts.verbose: opt += "-v "
+    cmd = shlex.split('%s %s %s -S -D %d -x "%s" %s' \
+                          % (os.environ['_'],
+                             os.path.join(os.environ['PWD'], sys.argv[0]),
+                             opt, delay, dsn, dest))
+    if opts.verbose:
+        log("Spawning %s" % " ".join(cmd))
+
+    return subprocess.Popen(cmd,
+                            stdin  = subprocess.PIPE,
+                            stdout = sys.stdout,
+                            stderr = sys.stderr)
+
+def xlogcopy_loop(curs, dest, base, delay, verbose, debug):
+    """ loop over WAL files and copy them, until asked to terminate """
+    import time, select
+    base = PGXLOG
+    wal_files = {} # remember what we did already
+    finished = False
+
+    p = select.poll()
+    p.register(sys.stdin, select.POLLIN)
+
+    while not finished:
+        # get all PGLOXG files, then again, then again
+        for path, size in get_files(curs, dest, base, None, verbose, debug):
+            if path in wal_files and wal_files[path] == size:
+                log("skipping '%s', size is still %d" % (path, size))
+            else:
+                get_one_file(curs, dest, path, verbose, debug)
+                wal_files[path] = size
+
+        log("polling stdin")
+        if p.poll(1000 * int(delay)):
+            command = sys.stdin.readline()
+            finished = command == "terminate\n"
+
     return
 
 if __name__ == '__main__':
@@ -147,15 +192,23 @@ if __name__ == '__main__':
                       default = False,
                       help    = "show debug information, including SQL queries")
 
-    parser.add_option("-n", "--dry-run", action = "store_true",
-                      dest    = "dry_run",
-                      default = False,
-                      help    = "only tell what it would do")
-
     parser.add_option("-f", "--force", action = "store_true",
                       dest    = "force",
                       default = False,
                       help    = "remove destination directory if it exists")
+
+    parser.add_option("-D", "--delay", dest = "delay", default = 2,
+                      help    = "subprocess loop delay, use with -x")
+
+    parser.add_option("-S", "--slave", action = "store_true",
+                      dest    = "slave",
+                      default = False,
+                      help    = "auxilliary process")
+
+    parser.add_option("--stdin", action = "store_true",
+                      dest    = "stdin",
+                      default = False,
+                      help    = "get list of files to backup from stdin")
 
     (opts, args) = parser.parse_args()
 
@@ -163,16 +216,9 @@ if __name__ == '__main__':
         print VERSION
         sys.exit(0)
 
-    base = ''
-    if opts.xlog:
-        base = PGXLOG
-
-    opts.verbose = opts.verbose or opts.dry_run or opts.debug
-    if opts.verbose:
-        if opts.debug:
-            print "We'll be verbose, and show debug information"
-        else:
-            print "We'll be verbose"
+    opts.verbose = opts.verbose or opts.debug
+    if opts.verbose: log("verbose")
+    if opts.debug: log("debug chatter activated")
 
     if len(args) != 2:
         print "Error: see usage "
@@ -182,54 +228,98 @@ if __name__ == '__main__':
     dest = args[1]
 
     # prepare destination directory
-    if os.path.isdir(dest):
-        if opts.force:
-            import shutil
-            print "rm -rf %s" % dest
-            shutil.rmtree(dest)
+    if not opts.slave:
+        if os.path.isdir(dest):
+            if opts.force:
+                import shutil
+                log("rm -rf %s" % dest)
+                shutil.rmtree(dest)
+            else:
+                print "Error: destination directory already exists"
+                sys.exit(1)
         else:
-            print "Error: destination directory already exists"
-            sys.exit(1)
-    else:
-        if os.path.exists(dest):
-            print "Error: '%s' is not a directory" % dest
-            sys.exit(1)
+            if os.path.exists(dest):
+                print "Error: '%s' already exists" % dest
+                sys.exit(1)
 
     try:
         if opts.verbose:
-            print "Connecting to '%s'" % dsn
+            log("Connecting to '%s'" % dsn)
         conn = psycopg2.connect(dsn)
     except Exception, e:
         print "Error: couldn't connect to '%s':" % dsn
         print e
         sys.exit(2)
 
-    try:
-        os.makedirs(dest)
-    except Exception, e:
-        print "Error: coudn't create the destination PGDATA at '%s'" % dest
-        sys.exit(3)
+    # mkdir standby's PGDATA
+    if not opts.slave:
+        try:
+            os.makedirs(dest)
+        except Exception, e:
+            print "Error: coudn't create the destination PGDATA at '%s'" % dest
+            sys.exit(3)
 
+    # CREATE OR REPLACE FUNCTIONs in a separate transaction
+    # so that functions are visible in the slave processes
+    if not opts.slave:
+        if opts.verbose:
+            log("Creating support functions")
+        curs = conn.cursor()
+        curs.execute(list_files_sql)
+        curs.execute(read_file_sql)
+        curs.execute("COMMIT;")
+        curs.close()
+
+    # BEGIN
     curs = conn.cursor()
-    if opts.verbose:
-        print "Creating support functions"
 
-    curs.execute(list_files_sql)
-    curs.execute(read_file_sql)
+    if not opts.slave:
+        label = '%s_%s' % (LABEL, datetime.datetime.today().isoformat())
+        if opts.verbose:
+            log("SELECT pg_start_backup('%s');" % label)
+        curs.execute("SELECT pg_start_backup(%s);", [label])
+    else:
+        log("subprocess started: %s" % " ".join(sys.argv[1:]))
 
-    label = '%s_%s' % (LABEL, datetime.datetime.today().isoformat())
-    if opts.verbose:
-        log("SELECT pg_start_backup('%s');" % label)
-    curs.execute("SELECT pg_start_backup(%s);", [label])
+    # launch an helper process to care for the logs
+    if not opts.slave and not opts.xlog:
+        xlogcopy = spawn_xlogcopy(dsn, dest,
+                                  opts.delay, opts.verbose, opts.debug)
 
-    # do the copy
+    #
+    # The following code of course is still run in slave processes too.
+    #
+    # do the copy, depending if we're there for the WALs or the base backup
+    base = ''
     exclude = None
-    if not opts.xlog:
-        exclude = PGXLOG
 
-    get_files(curs, dest, base, exclude, opts.verbose, opts.debug)
+    if opts.xlog:
+        # the only way this function returns is when we send 'terminate\n'
+        # on its standard input
+        xlogcopy_loop(curs, dest, base, opts.delay, opts.verbose, opts.debug)
+        sys.exit(0)
 
-    if opts.debug:
-        log("SELECT pg_stop_backup();")
-    curs.execute("SELECT pg_stop_backup();")
+    # main loop
+    exclude = PGXLOG
+    for path, size in get_files(curs, dest, base, exclude,
+                                opts.verbose, opts.debug):
+        get_one_file(curs, dest, path, opts.verbose, opts.debug)
+
+    # terminate the xlogcopy process
+    log("sending 'terminate' to %d" % xlogcopy.pid)
+    print >> xlogcopy.stdin, "terminate"
+
+    if opts.verbose:
+        log("Waiting on pid %d" % xlogcopy.pid)
+    r = xlogcopy.wait()
+
+    if opts.verbose:
+        log("subprocess %d: %s" % (xlogcopy.pid, r))
+
+    # Stop the backup now, we have it all
+    if not opts.slave:
+        if opts.debug:
+            log("SELECT pg_stop_backup();")
+        curs.execute("SELECT pg_stop_backup();")
+
     curs.close()
