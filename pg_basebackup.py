@@ -362,14 +362,6 @@ if __name__ == '__main__':
             print >> jobs[n % opts.jobs].stdin, path
             n += 1
 
-    # terminate the xlogcopy process
-    if opts.verbose:
-        log("sending 'terminate' to %d" % xlogcopy.pid)
-    print >> xlogcopy.stdin, "terminate"
-    if opts.verbose:
-        log("Waiting on pid %d" % xlogcopy.pid)
-    xlogcopy.wait()
-
     # teminate the helpers and wait on them
     if opts.jobs > 1:
         for j in range(opts.jobs):
@@ -380,6 +372,14 @@ if __name__ == '__main__':
     if opts.jobs > 1:
         for j in range(opts.jobs):
             jobs[j].wait()
+
+    # terminate the xlogcopy process
+    if opts.verbose:
+        log("sending 'terminate' to %d" % xlogcopy.pid)
+    print >> xlogcopy.stdin, "terminate"
+    if opts.verbose:
+        log("Waiting on pid %d" % xlogcopy.pid)
+    xlogcopy.wait()
 
     # Stop the backup now, we have it all
     if not opts.slave:
