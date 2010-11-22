@@ -304,7 +304,7 @@ if __name__ == '__main__':
     # mkdir standby's PGDATA
     if not opts.slave:
         try:
-            os.makedirs(dest)
+            os.makedirs(dest, 0700)
         except Exception, e:
             print "Error: coudn't create the destination PGDATA at '%s'" % dest
             sys.exit(3)
@@ -429,5 +429,13 @@ if __name__ == '__main__':
 
     curs.close()
 
+    # now remove any existing pid file so that it's possible to start the
+    # cluster
+    pidfile = os.path.join(dest, "postmaster.pid")
+    if os.path.exists(pidfile):
+        log("rm %s" % pidfile)
+        os.unlink(pidfile)
+
     log("Your cluster is ready at '%s'" % dest)
+    log("pg_ctl -D %s -l logfile start" % dest)
     print
