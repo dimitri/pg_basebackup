@@ -153,7 +153,7 @@ def spawn_helper(dsn, dest, stdin, pgxlog, delay, verbose, debug):
         command = "%s %s"  % (os.environ['_'],
                               os.path.join(os.environ['PWD'], command))
 
-    cmd = shlex.split('%s -S %s "%s" %s' % (command, opt, dsn, dest))
+    cmd = shlex.split('%s -S %s "%s" %s' % (command, opt, dest, dsn))
     if verbose:
         log("Spawning %s" % " ".join(cmd))
 
