@@ -199,8 +199,19 @@ def xlogcopy_loop(curs, dest, base, delay, verbose, debug):
 
 def basecopy_loop(curs, dest, base, verbose, debug):
     """ copy files given on stdin until we read 'terminate' """
-    for path in sys.stdin:
-        path = path[:-1]  # chomp \n
+    # we bufferize stdin so that we free the producer as early as possible
+    pathlist = []
+    path = sys.stdin.readline()
+    while path:
+        path = path[:-1] # chomp \n
+        if path == "terminate":
+            break
+        pathlist.append(path)
+        path = sys.stdin.readline()
+
+    # now we can process the path list we got
+    log("path list received, processing it now")
+    for path in pathlist:
         get_one_file(curs, dest, path, verbose, debug)
     return
 
@@ -379,6 +390,7 @@ if __name__ == '__main__':
         sys.exit(0)
 
     # main loop --- slaves have exited already, won't reach this code.
+    assert(not opts.slave)
     exclude = PGXLOG
 
     # prepare the helpers
@@ -395,7 +407,6 @@ if __name__ == '__main__':
             get_one_file(curs, dest, path, opts.verbose, opts.debug)
         else:
             # give next slave some work
-            #log("%d <-- '%s'" % (jobs[n % opts.jobs].pid, path))
             print >> jobs[n % opts.jobs].stdin, path
             n += 1
 
@@ -404,6 +415,7 @@ if __name__ == '__main__':
         for j in range(opts.jobs):
             if opts.verbose:
                 log("close %d" % jobs[j].pid)
+            print >> jobs[j].stdin, "terminate"
             jobs[j].stdin.close()
 
     if opts.jobs > 1:
