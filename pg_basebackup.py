@@ -137,10 +137,18 @@ def spawn_helper(dsn, dest, stdin, pgxlog, delay, verbose, debug):
     if pgxlog:  opt += "-x "
     if delay:   opt += "-D %d " % delay
 
-    cmd = shlex.split('%s %s -S %s "%s" %s' \
-                          % (os.environ['_'],
-                             os.path.join(os.environ['PWD'], sys.argv[0]),
-                             opt, dsn, dest))
+    # check if we're run in the form /path/to/python script.py or in the
+    # form ./script.py, in order to execute the subprocess in the same way
+    command = sys.argv[0]
+    if command == os.environ['_']:
+        # ./script.py case
+        command = os.path.join(os.environ['PWD'], command)
+    else:
+        # python script.py case
+        command = "%s %s"  % (os.environ['_'],
+                              os.path.join(os.environ['PWD'], command))
+
+    cmd = shlex.split('%s -S %s "%s" %s' % (command, opt, dsn, dest))
     if verbose:
         log("Spawning %s" % " ".join(cmd))
 
@@ -376,10 +384,15 @@ if __name__ == '__main__':
     # terminate the xlogcopy process
     if opts.verbose:
         log("sending 'terminate' to %d" % xlogcopy.pid)
-    print >> xlogcopy.stdin, "terminate"
-    if opts.verbose:
-        log("Waiting on pid %d" % xlogcopy.pid)
-    xlogcopy.wait()
+    try:
+        print >> xlogcopy.stdin, "terminate"
+
+        if opts.verbose:
+            log("Waiting on pid %d" % xlogcopy.pid)
+        xlogcopy.wait()
+    except IOError, e:
+        # broken pipe
+        log("ERROR: we lost the pg_xlog slave, pid %d" % xlogcopy.pid)
 
     # Stop the backup now, we have it all
     if not opts.slave:
