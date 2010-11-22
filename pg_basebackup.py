@@ -199,6 +199,11 @@ def basecopy_loop(curs, dest, base, verbose, debug):
         get_one_file(curs, dest, path, verbose, debug)
     return
 
+def stop_backup(curs):
+    """ call pg_stop_backup() """
+    log("SELECT pg_stop_backup();")
+    curs.execute("SELECT pg_stop_backup();")
+
 if __name__ == '__main__':
     usage  = '%prog [-v] [-f] [-j jobs] "dsn" dest'
     parser = OptionParser(usage = usage)
@@ -227,6 +232,11 @@ if __name__ == '__main__':
                       dest    = "force",
                       default = False,
                       help    = "remove destination directory if it exists")
+
+    parser.add_option("--clean", action = "store_true",
+                      dest    = "clean",
+                      default = False,
+                      help    = "stop left-over backup if backup_label exists")
 
     parser.add_option("-j", "--jobs", dest = "jobs",
                       type = "int", default = 1,
@@ -294,6 +304,17 @@ if __name__ == '__main__':
         except Exception, e:
             print "Error: coudn't create the destination PGDATA at '%s'" % dest
             sys.exit(3)
+
+    # clean already running backup if given the option
+    if opts.clean or opts.force:
+        curs = conn.cursor()
+        try:
+            curs.execute("select pg_stat_file('backup_label')")
+            if curs.rowcount == 1:
+                stop_backup(curs)
+        except:
+            # pg_stat_file reports an ERROR when the file does not exists
+            pass
 
     # CREATE OR REPLACE FUNCTIONs in a separate transaction
     # so that functions are visible in the slave processes
@@ -396,8 +417,7 @@ if __name__ == '__main__':
 
     # Stop the backup now, we have it all
     if not opts.slave:
-        log("SELECT pg_stop_backup();")
-        curs.execute("SELECT pg_stop_backup();")
+        stop_backup(curs)
 
     curs.close()
 
