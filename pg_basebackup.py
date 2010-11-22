@@ -6,7 +6,7 @@ from optparse import OptionParser
 
 CSIZE = 8192 * 1024 # we work with chunks of 8MB
 LABEL = 'pg_basebackup'
-VERSION = 0.2
+VERSION = 0.3
 PGXLOG = 'pg_xlog'
 PYTHON = '/usr/bin/python'
 
