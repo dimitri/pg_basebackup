@@ -210,7 +210,7 @@ def stop_backup(curs):
     curs.execute("SELECT pg_stop_backup();")
 
 if __name__ == '__main__':
-    usage  = '%prog [-v] [-f] [-j jobs] "dsn" dest'
+    usage  = '%prog [-v] [-f] [-j jobs] dest dsn'
     parser = OptionParser(usage = usage)
 
     parser.add_option("--version", action = "store_true",
@@ -270,12 +270,12 @@ if __name__ == '__main__':
     opts.verbose = opts.verbose or opts.debug
     if opts.debug: log("debug chatter activated")
 
-    if len(args) != 2:
+    if len(args) < 2:
         print "Error: see usage "
         sys.exit(1)
 
-    dsn = args[0]
-    dest = args[1]
+    dest = args[0]
+    dsn = " ".join(args[1:])
 
     # prepare destination directory
     if not opts.slave:

@@ -1,6 +1,6 @@
 We take a base backup from a live server using a libpq connection.
 
-Usage: pg_basebackup.py [-v] [-f] [-j jobs] "dsn" dest
+Usage: pg_basebackup.py [-v] [-f] [-j jobs] dest dsn
 
 Options:
   -h, --help            show this help message and exit
@@ -16,7 +16,7 @@ Options:
   --stdin               get list of files to backup from stdin
 
 Example:
-python pg_basebackup.py "host=remote user=postgres" /path/to/slave/pgdata
+python pg_basebackup.py /path/to/slave/pgdata host=remote user=postgres
 
 
 Please not that while the backup is ongoing, we continue backuping the WAL
