@@ -11,7 +11,7 @@ PGXLOG = 'pg_xlog'
 PYTHON = '/usr/bin/python'
 
 list_files_sql = """
-CREATE OR REPLACE FUNCTION pg_bb_list_files
+CREATE OR REPLACE FUNCTION public.pg_bb_list_files
 ( IN basepath text default '',
  OUT path text,
  OUT isdir bool,
@@ -45,7 +45,7 @@ $$;
 """ % (os.path.sep, os.path.sep, os.path.sep)
 
 read_file_sql = """
-CREATE OR REPLACE FUNCTION pg_bb_read_file
+CREATE OR REPLACE FUNCTION public.pg_bb_read_file
 (path text,
  pos bigint,
  size bigint default 8192*1024
@@ -59,7 +59,7 @@ AS $$
   return compress(f.read(size))
 $$;
 
-CREATE OR REPLACE FUNCTION pg_bb_count_chunks
+CREATE OR REPLACE FUNCTION public.pg_bb_count_chunks
  (path text,
   length bigint default 8192*1024
  )
@@ -85,14 +85,14 @@ def get_one_file(curs, dest, path, verbose, debug):
         log(path)
 
     if debug:
-        log("SELECT pg_bb_count_chunks(%s, %s);" % (path, CSIZE))
+        log("SELECT public.pg_bb_count_chunks(%s, %s);" % (path, CSIZE))
 
-    curs.execute("SELECT pg_bb_count_chunks(%s, %s);", [path, CSIZE])
+    curs.execute("SELECT public.pg_bb_count_chunks(%s, %s);", [path, CSIZE])
     for c in range(0, curs.fetchone()[0]):
         if debug:
-            log("SELECT pg_bb_read_file(%s,%s,%s);" % (path, c*CSIZE, CSIZE))
+            log("SELECT public.pg_bb_read_file(%s,%s,%s);" % (path, c*CSIZE, CSIZE))
 
-        curs.execute("SELECT pg_bb_read_file(%s,%s,%s);",
+        curs.execute("SELECT public.pg_bb_read_file(%s,%s,%s);",
                      [path, c*CSIZE, CSIZE])
         chunk = decompress(str(curs.fetchone()[0][1:]).decode('hex'))
         f.write(chunk)
@@ -101,7 +101,7 @@ def get_one_file(curs, dest, path, verbose, debug):
 
 def get_files(curs, dest, base, exclude, verbose, debug):
     """Get all files from master starting at path, and write them in dest"""
-    sql = "SELECT * FROM pg_bb_list_files(%s)"
+    sql = "SELECT * FROM public.pg_bb_list_files(%s)"
     if exclude:
         sql += " WHERE path !~ '%s' " % exclude
 
