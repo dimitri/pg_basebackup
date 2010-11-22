@@ -94,7 +94,12 @@ def get_one_file(curs, dest, path, verbose, debug):
 
         curs.execute("SELECT public.pg_bb_read_file(%s,%s,%s);",
                      [path, c*CSIZE, CSIZE])
-        chunk = decompress(str(curs.fetchone()[0][1:]).decode('hex'))
+        # depending on psycopg version the chunk is already decoded
+        data  = str(curs.fetchone()[0])
+        if data is not '' and data[0] == 'x':
+            chunk = decompress(data[1:].decode('hex'))
+        else:
+            chunk = decompress(data)
         f.write(chunk)
 
     f.close()
