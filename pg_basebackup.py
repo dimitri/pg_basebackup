@@ -268,7 +268,6 @@ if __name__ == '__main__':
         sys.exit(0)
 
     opts.verbose = opts.verbose or opts.debug
-    if opts.verbose: log("verbose")
     if opts.debug: log("debug chatter activated")
 
     if len(args) != 2:
@@ -319,18 +318,22 @@ if __name__ == '__main__':
                 stop_backup(curs)
         except:
             # pg_stat_file reports an ERROR when the file does not exists
-            pass
+            conn.rollback()
 
     # CREATE OR REPLACE FUNCTIONs in a separate transaction
     # so that functions are visible in the slave processes
     if not opts.slave:
         if opts.verbose:
             log("Creating support functions")
-        curs = conn.cursor()
-        curs.execute(list_files_sql)
-        curs.execute(read_file_sql)
-        conn.commit()
-        curs.close()
+        try:
+            curs = conn.cursor()
+            curs.execute(list_files_sql)
+            curs.execute(read_file_sql)
+            conn.commit()
+            curs.close()
+        except psycopg2.InternalError, e:
+            log(e)
+            sys.exit(2)
 
     # BEGIN
     curs = conn.cursor()
