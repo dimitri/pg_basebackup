@@ -303,7 +303,7 @@ if __name__ == '__main__':
         curs = conn.cursor()
         curs.execute(list_files_sql)
         curs.execute(read_file_sql)
-        curs.execute("COMMIT;")
+        conn.commit()
         curs.close()
 
     # BEGIN
